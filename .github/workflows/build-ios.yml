@@ -12,78 +12,165 @@ concurrency:
 
 jobs:
   build-ios:
-    runs-on: ubuntu-latest
+    runs-on: macos-13
+    timeout-minutes: 120
     
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Create Metadata File
+    - name: Set up Xcode
       run: |
-        mkdir -p build/output
-        echo "PCSX2 iOS App - Built for LiveContainer" > build/output/BUILD_INFO.txt
-        echo "========================================" >> build/output/BUILD_INFO.txt
-        echo "" >> build/output/BUILD_INFO.txt
-        echo "Bundle ID: com.anchdev.pcsx2" >> build/output/BUILD_INFO.txt
-        echo "App Name: PCSX2" >> build/output/BUILD_INFO.txt
-        echo "Version: 1.0 (Build 1)" >> build/output/BUILD_INFO.txt
-        echo "Minimum iOS: 14.0" >> build/output/BUILD_INFO.txt
-        echo "Architecture: arm64 (Apple Silicon)" >> build/output/BUILD_INFO.txt
-        echo "" >> build/output/BUILD_INFO.txt
-        echo "Build Instructions:" >> build/output/BUILD_INFO.txt
-        echo "==================" >> build/output/BUILD_INFO.txt
-        echo "Full IPA builds require macOS runner with Xcode." >> build/output/BUILD_INFO.txt
-        echo "" >> build/output/BUILD_INFO.txt
-        echo "To build locally on your Mac:" >> build/output/BUILD_INFO.txt
-        echo "1. Clone: git clone https://github.com/anchdev/Anchsx2.git" >> build/output/BUILD_INFO.txt
-        echo "2. cd Anchsx2" >> build/output/BUILD_INFO.txt
-        echo "3. See docs/iOS_Build_Guide.md for full instructions" >> build/output/BUILD_INFO.txt
-        echo "" >> build/output/BUILD_INFO.txt
-        echo "Installation Instructions:" >> build/output/BUILD_INFO.txt
-        echo "=========================" >> build/output/BUILD_INFO.txt
-        echo "1. Build IPA locally on macOS" >> build/output/BUILD_INFO.txt
-        echo "2. Download PCSX2-unsigned.ipa" >> build/output/BUILD_INFO.txt
-        echo "3. Open in LiveContainer app" >> build/output/BUILD_INFO.txt
-        echo "4. Install and run on iOS device" >> build/output/BUILD_INFO.txt
-        echo "" >> build/output/BUILD_INFO.txt
-        echo "Features:" >> build/output/BUILD_INFO.txt
-        echo "- Metal GPU acceleration" >> build/output/BUILD_INFO.txt
-        echo "- Modern SwiftUI interface" >> build/output/BUILD_INFO.txt
-        echo "- File picker for ROM selection" >> build/output/BUILD_INFO.txt
-        echo "- Playback controls (Play/Pause/Stop)" >> build/output/BUILD_INFO.txt
-        echo "" >> build/output/BUILD_INFO.txt
-        echo "Compatibility:" >> build/output/BUILD_INFO.txt
-        echo "- iOS 14.0 or later" >> build/output/BUILD_INFO.txt
-        echo "- iPhone and iPad" >> build/output/BUILD_INFO.txt
-        echo "- All Apple Silicon devices recommended" >> build/output/BUILD_INFO.txt
-        cat build/output/BUILD_INFO.txt
+        sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+        xcodebuild -version
 
-    - name: Upload Metadata Artifact
+    - name: Install CMake
+      run: brew install cmake
+
+    - name: Install dependencies
+      run: |
+        brew install sdl2 libzip xz
+
+    - name: Create build directory
+      run: mkdir -p build
+
+    - name: Configure CMake for iOS
+      run: |
+        cd build
+        cmake -G Xcode \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+          -DBUILD_SHARED_LIBS=OFF \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DMETAL=ON \
+          ..
+
+    - name: Build for iOS
+      run: |
+        cd build
+        xcodebuild \
+          -scheme Pcsx2 \
+          -configuration Release \
+          -arch arm64 \
+          -sdk iphoneos \
+          -derivedDataPath .build \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGN_ENTITLEMENTS=""
+
+    - name: Create IPA Package
+      run: |
+        cd build
+        mkdir -p PCSX2.ipa/Payload
+        
+        # Find the built app
+        APP_PATH=".build/Build/Products/Release-iphoneos/Pcsx2.app"
+        if [ ! -d "$APP_PATH" ]; then
+          echo "App not found at $APP_PATH"
+          find .build -name "*.app" -type d
+          exit 1
+        fi
+        
+        # Copy app to IPA payload
+        cp -r "$APP_PATH" PCSX2.ipa/Payload/
+        
+        # Create IPA (unsigned)
+        cd PCSX2.ipa
+        zip -r ../PCSX2-unsigned.ipa Payload/
+        cd ..
+        
+        # Verify IPA was created
+        if [ -f "PCSX2-unsigned.ipa" ]; then
+          echo "✓ IPA created successfully"
+          ls -lh PCSX2-unsigned.ipa
+        else
+          echo "✗ Failed to create IPA"
+          exit 1
+        fi
+
+    - name: Prepare Artifacts
+      run: |
+        mkdir -p artifacts
+        cp build/PCSX2-unsigned.ipa artifacts/
+        
+        cat > artifacts/BUILD_INFO.txt << 'EOF'
+PCSX2 iOS App - Built for LiveContainer
+========================================
+
+Bundle ID: com.anchdev.pcsx2
+App Name: PCSX2
+Version: 1.0
+Build: ${{ github.run_number }}
+Commit: ${{ github.sha }}
+Branch: ${{ github.ref_name }}
+Date: $(date)
+
+System Requirements:
+- iOS 14.0 or later
+- iPhone/iPad with A11 Bionic or newer
+- 3GB+ RAM recommended
+- 500MB+ storage
+
+Installation:
+1. Download PCSX2-unsigned.ipa from artifacts
+2. Install LiveContainer app from App Store
+3. Add PCSX2-unsigned.ipa to LiveContainer
+4. Launch app and load PS2 ROM files
+
+Features:
+- Metal GPU acceleration
+- SwiftUI interface
+- ROM file picker
+- Play/Pause/Stop controls
+- Automatic Metal/Vulkan detection
+
+For more info, see docs/LiveContainer_Guide.md
+EOF
+        cat artifacts/BUILD_INFO.txt
+
+    - name: Upload IPA Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: PCSX2-iOS-LiveContainer
-        path: build/output/
-        retention-days: 30
+        name: PCSX2-unsigned.ipa
+        path: artifacts/PCSX2-unsigned.ipa
+        retention-days: 90
 
-    - name: Create Release (on Tags)
+    - name: Upload Build Info
+      uses: actions/upload-artifact@v4
+      with:
+        name: BUILD_INFO
+        path: artifacts/BUILD_INFO.txt
+        retention-days: 90
+
+    - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: build/output/BUILD_INFO.txt
+        files: |
+          artifacts/PCSX2-unsigned.ipa
+          artifacts/BUILD_INFO.txt
         body: |
-          PCSX2 iOS Build
+          # PCSX2 iOS Release
           
-          **For full IPA builds, see the [iOS Build Guide](https://github.com/anchdev/Anchsx2/blob/master/docs/iOS_Build_Guide.md)**
+          **Bundle ID:** com.anchdev.pcsx2
+          **Minimum iOS:** 14.0
+          **Architecture:** ARM64
           
-          Build locally on macOS:
-          ```bash
-          git clone https://github.com/anchdev/Anchsx2.git
-          cd Anchsx2
-          mkdir build && cd build
-          cmake -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DMETAL=ON ..
-          xcodebuild -scheme Pcsx2 -configuration Release -arch arm64 -sdk iphoneos
-          ```
+          ## Installation
+          1. Download `PCSX2-unsigned.ipa`
+          2. Install [LiveContainer](https://www.livecontainer.io/)
+          3. Add IPA to LiveContainer
+          4. Launch and enjoy!
+          
+          ## Features
+          - Metal GPU acceleration
+          - Modern SwiftUI interface
+          - ROM file browser
+          - Play/Pause/Stop controls
+          
+          See [LiveContainer Guide](https://github.com/anchdev/Anchsx2/blob/master/docs/LiveContainer_Guide.md) for detailed instructions.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
