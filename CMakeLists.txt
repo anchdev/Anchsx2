@@ -72,7 +72,7 @@ endif()
 
 #-------------------------------------------------------------------------------
 if(NOT IS_SUPPORTED_COMPILER)
-	message(WARNING "
+  message(WARNING "
 *************** UNSUPPORTED CONFIGURATION ***************
 You are not compiling PCSX2 with a supported compiler.
 It may not even build successfully.
@@ -80,18 +80,66 @@ PCSX2 only supports the Clang and MSVC compilers.
 No support will be provided, continue at your own risk.
 *********************************************************")
 endif()
-
+ 
 if(_M_ARM64)
-	message(WARNING "
-*************** UNSUPPORTED CONFIGURATION ***************
-
+  message(WARNING "
+*************** UNSUPPORTED CONFIGURATION (Apple Silicon) ***************
+ 
 Apple Silicon support in PCSX2 is INCOMPLETE. There are
 currently no EE/VU/IOP recompilers, and games will run
-VERY slow. There is no date for completion yet, you
-should set -DCMAKE_OSX_ARCHITECTURES=x86_64 for now,
-unless you want to work on the recompilers.
-
+VERY slow. However, we now have Metal/Vulkan support detection.
+You can enable Metal by setting -DMETAL=ON or Vulkan with -DVULKAN=ON.
+ 
 We also ask that you read https://dont-ship.it/.
-
+ 
 *********************************************************")
+endif()
+if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+  message(STATUS "Apple Silicon (ARM64) detected. Metal/Vulkan support enabled.")
+  if(NOT METAL)
+    set(METAL ON CACHE BOOL "Enable Metal API" FORCE)
+  endif()
+  if(NOT VULKAN)
+    set(VULKAN ON CACHE BOOL "Enable Vulkan API" FORCE)
+  endif()
+endif()
+if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+  message(STATUS "Intel (x86_64) detected. Metal/Vulkan support available.")
+  if(NOT METAL)
+    set(METAL ON CACHE BOOL "Enable Metal API" FORCE)
+  endif()
+  if(NOT VULKAN)
+    set(VULKAN ON CACHE BOOL "Enable Vulkan API" FORCE)
+  endif()
+endif()
+if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+  message(STATUS "iOS (ARM64) detected. Metal/Vulkan support enabled.")
+  if(NOT METAL)
+    set(METAL ON CACHE BOOL "Enable Metal API for iOS" FORCE)
+  endif()
+  if(NOT VULKAN)
+    set(VULKAN ON CACHE BOOL "Enable Vulkan API for iOS" FORCE)
+  endif()
+endif()
+if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+  message(STATUS "Intel (x86_64) detected. Metal/Vulkan support available.")
+  if(NOT METAL)
+    set(METAL ON CACHE BOOL "Enable Metal API for macOS" FORCE)
+  endif()
+  if(NOT VULKAN)
+    set(VULKAN ON CACHE BOOL "Enable Vulkan API for macOS" FORCE)
+  endif()
+endif()
+if(NOT (METAL OR VULKAN))
+  message(STATUS "No GPU acceleration API selected. Falling back to software rendering.")
+
+# Vulkan configuration
+find_package(Vulkan REQUIRED)
+if(NOT Vulkan_FOUND)
+  message(FATAL_ERROR "Vulkan library not found!")
+else()
+  message(STATUS "Vulkan found: ${Vulkan_VERSION}")
+  if(NOT VULKAN)
+    set(VULKAN ON CACHE BOOL "Enable Vulkan API" FORCE)
+  endif()
 endif()
