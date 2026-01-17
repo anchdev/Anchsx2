@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build iOS IPA (Unsigned for LiveContainer)
 
 on:
   push:
@@ -30,7 +30,7 @@ jobs:
     - name: Create build directory
       run: mkdir -p build
 
-    - name: Configure CMake for iOS
+    - name: Configure CMake for iOS (Unsigned)
       run: |
         cd build
         cmake -G Xcode \
@@ -43,29 +43,87 @@ jobs:
           -DVULKAN=ON \
           ..
 
-    - name: Build for iOS
+    - name: Build for iOS (No Signing)
       run: |
         cd build
-        xcodebuild -scheme Pcsx2 -configuration Release -arch arm64 -sdk iphoneos
+        xcodebuild \
+          -scheme Pcsx2 \
+          -configuration Release \
+          -arch arm64 \
+          -sdk iphoneos \
+          -derivedDataPath .build \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGN_ENTITLEMENTS="" \
+          PROVISIONING_PROFILE="" \
+          PROVISIONING_PROFILE_SPECIFIER=""
 
-    - name: Create IPA
+    - name: Create Unsigned IPA for LiveContainer
       run: |
         cd build
-        xcodebuild -exportArchive \
-          -archivePath ./PCSX2.xcarchive \
-          -exportOptionsPlist ./ExportOptions.plist \
-          -exportPath ./output
+        # Extract app from build output
+        APP_PATH=".build/Build/Products/Release-iphoneos/PCSX2.app"
+        
+        # Create IPA payload structure
+        mkdir -p PCSX2.ipa/Payload
+        cp -r "$APP_PATH" PCSX2.ipa/Payload/
+        
+        # Create IPA zip (unsigned)
+        cd PCSX2.ipa
+        zip -r ../PCSX2-unsigned.ipa Payload/
+        cd ..
+        
+        # Move to output directory
+        mkdir -p output
+        mv PCSX2-unsigned.ipa output/
 
-    - name: Upload IPA artifact
+    - name: Create Metadata File
+      run: |
+        cat > build/output/BUILD_INFO.txt << 'EOF'
+PCSX2 iOS App - Built for LiveContainer
+========================================
+
+Bundle ID: com.anchdev.pcsx2
+App Name: PCSX2
+Version: 1.0 (Build 1)
+Minimum iOS: 14.0
+Architecture: arm64 (Apple Silicon)
+
+Installation Instructions:
+1. Download PCSX2-unsigned.ipa
+2. Open in LiveContainer app
+3. Install and run
+
+Features:
+- Metal GPU acceleration
+- Modern SwiftUI interface
+- File picker for ROM selection
+- Playback controls (Play/Pause/Stop)
+
+Compatibility:
+- iOS 14.0 or later
+- iPhone and iPad
+- All Apple Silicon devices recommended
+
+Note: This is an unsigned build for development/testing.
+For production, use App Store or proper code signing.
+EOF
+        cat build/output/BUILD_INFO.txt
+
+    - name: Upload IPA Artifact
       uses: actions/upload-artifact@v3
       with:
-        name: PCSX2-iOS
-        path: build/output/*.ipa
+        name: PCSX2-iOS-LiveContainer
+        path: build/output/
+        retention-days: 30
 
-    - name: Create Release
+    - name: Create Release (on Tags)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: build/output/*.ipa
+        files: |
+          build/output/PCSX2-unsigned.ipa
+          build/output/BUILD_INFO.txt
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

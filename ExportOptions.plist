@@ -14,5 +14,13 @@
 	<string></string>
 	<key>thinning</key>
 	<string>&lt;none&gt;</string>
+	<key>distributionBundleIdentifier</key>
+	<string>com.anchdev.pcsx2</string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>signingCertificate</key>
+	<string>Apple Development</string>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
 </dict>
 </plist>
