@@ -1,0 +1,16 @@
+{
+  "name": "PCSX2 iOS",
+  "version": "1.0.0",
+  "description": "PlayStation 2 Emulator for iOS",
+  "platforms": {
+    "ios": "14.0"
+  },
+  "buildSettings": {
+    "PRODUCT_NAME": "PCSX2",
+    "BUNDLE_IDENTIFIER": "com.pcsx2.emulator",
+    "TARGETED_DEVICE_FAMILY": "1,2",
+    "CODE_SIGN_STYLE": "Automatic",
+    "SWIFT_VERSION": "5.9",
+    "METAL_ENABLE_DEBUG_INFO": true
+  }
+}

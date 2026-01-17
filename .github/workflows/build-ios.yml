@@ -1,0 +1,71 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ master, main, develop ]
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Set up Xcode
+      run: |
+        sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+        xcodebuild -version
+
+    - name: Install CMake
+      run: brew install cmake
+
+    - name: Install dependencies
+      run: |
+        brew install qt@6 sdl2 libzip lzma
+
+    - name: Create build directory
+      run: mkdir -p build
+
+    - name: Configure CMake for iOS
+      run: |
+        cd build
+        cmake -G Xcode \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+          -DBUILD_SHARED_LIBS=OFF \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DMETAL=ON \
+          -DVULKAN=ON \
+          ..
+
+    - name: Build for iOS
+      run: |
+        cd build
+        xcodebuild -scheme Pcsx2 -configuration Release -arch arm64 -sdk iphoneos
+
+    - name: Create IPA
+      run: |
+        cd build
+        xcodebuild -exportArchive \
+          -archivePath ./PCSX2.xcarchive \
+          -exportOptionsPlist ./ExportOptions.plist \
+          -exportPath ./output
+
+    - name: Upload IPA artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: PCSX2-iOS
+        path: build/output/*.ipa
+
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: build/output/*.ipa
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
