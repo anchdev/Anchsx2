@@ -79,35 +79,34 @@ jobs:
 
     - name: Create Metadata File
       run: |
-        cat > build/output/BUILD_INFO.txt << 'EOF'
-PCSX2 iOS App - Built for LiveContainer
-========================================
-
-Bundle ID: com.anchdev.pcsx2
-App Name: PCSX2
-Version: 1.0 (Build 1)
-Minimum iOS: 14.0
-Architecture: arm64 (Apple Silicon)
-
-Installation Instructions:
-1. Download PCSX2-unsigned.ipa
-2. Open in LiveContainer app
-3. Install and run
-
-Features:
-- Metal GPU acceleration
-- Modern SwiftUI interface
-- File picker for ROM selection
-- Playback controls (Play/Pause/Stop)
-
-Compatibility:
-- iOS 14.0 or later
-- iPhone and iPad
-- All Apple Silicon devices recommended
-
-Note: This is an unsigned build for development/testing.
-For production, use App Store or proper code signing.
-EOF
+        mkdir -p build/output
+        echo "PCSX2 iOS App - Built for LiveContainer" > build/output/BUILD_INFO.txt
+        echo "========================================" >> build/output/BUILD_INFO.txt
+        echo "" >> build/output/BUILD_INFO.txt
+        echo "Bundle ID: com.anchdev.pcsx2" >> build/output/BUILD_INFO.txt
+        echo "App Name: PCSX2" >> build/output/BUILD_INFO.txt
+        echo "Version: 1.0 (Build 1)" >> build/output/BUILD_INFO.txt
+        echo "Minimum iOS: 14.0" >> build/output/BUILD_INFO.txt
+        echo "Architecture: arm64 (Apple Silicon)" >> build/output/BUILD_INFO.txt
+        echo "" >> build/output/BUILD_INFO.txt
+        echo "Installation Instructions:" >> build/output/BUILD_INFO.txt
+        echo "1. Download PCSX2-unsigned.ipa" >> build/output/BUILD_INFO.txt
+        echo "2. Open in LiveContainer app" >> build/output/BUILD_INFO.txt
+        echo "3. Install and run" >> build/output/BUILD_INFO.txt
+        echo "" >> build/output/BUILD_INFO.txt
+        echo "Features:" >> build/output/BUILD_INFO.txt
+        echo "- Metal GPU acceleration" >> build/output/BUILD_INFO.txt
+        echo "- Modern SwiftUI interface" >> build/output/BUILD_INFO.txt
+        echo "- File picker for ROM selection" >> build/output/BUILD_INFO.txt
+        echo "- Playback controls (Play/Pause/Stop)" >> build/output/BUILD_INFO.txt
+        echo "" >> build/output/BUILD_INFO.txt
+        echo "Compatibility:" >> build/output/BUILD_INFO.txt
+        echo "- iOS 14.0 or later" >> build/output/BUILD_INFO.txt
+        echo "- iPhone and iPad" >> build/output/BUILD_INFO.txt
+        echo "- All Apple Silicon devices recommended" >> build/output/BUILD_INFO.txt
+        echo "" >> build/output/BUILD_INFO.txt
+        echo "Note: This is an unsigned build for development/testing." >> build/output/BUILD_INFO.txt
+        echo "For production, use App Store or proper code signing." >> build/output/BUILD_INFO.txt
         cat build/output/BUILD_INFO.txt
 
     - name: Upload IPA Artifact
