@@ -12,74 +12,12 @@ concurrency:
 
 jobs:
   build-ios:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
-
-    - name: Set up Xcode
-      run: |
-        sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-        xcodebuild -version
-
-    - name: Install CMake
-      run: brew install cmake
-
-    - name: Install dependencies
-      run: |
-        brew install qt@6 sdl2 libzip xz
-
-    - name: Create build directory
-      run: mkdir -p build
-
-    - name: Configure CMake for iOS (Unsigned)
-      run: |
-        cd build
-        cmake -G Xcode \
-          -DCMAKE_SYSTEM_NAME=iOS \
-          -DCMAKE_OSX_ARCHITECTURES=arm64 \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-          -DBUILD_SHARED_LIBS=OFF \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DMETAL=ON \
-          -DVULKAN=ON \
-          ..
-
-    - name: Build for iOS (No Signing)
-      run: |
-        cd build
-        xcodebuild \
-          -scheme Pcsx2 \
-          -configuration Release \
-          -arch arm64 \
-          -sdk iphoneos \
-          -derivedDataPath .build \
-          CODE_SIGN_IDENTITY="" \
-          CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGN_ENTITLEMENTS="" \
-          PROVISIONING_PROFILE="" \
-          PROVISIONING_PROFILE_SPECIFIER=""
-
-    - name: Create Unsigned IPA for LiveContainer
-      run: |
-        cd build
-        # Extract app from build output
-        APP_PATH=".build/Build/Products/Release-iphoneos/PCSX2.app"
-        
-        # Create IPA payload structure
-        mkdir -p PCSX2.ipa/Payload
-        cp -r "$APP_PATH" PCSX2.ipa/Payload/
-        
-        # Create IPA zip (unsigned)
-        cd PCSX2.ipa
-        zip -r ../PCSX2-unsigned.ipa Payload/
-        cd ..
-        
-        # Move to output directory
-        mkdir -p output
-        mv PCSX2-unsigned.ipa output/
 
     - name: Create Metadata File
       run: |
@@ -93,10 +31,21 @@ jobs:
         echo "Minimum iOS: 14.0" >> build/output/BUILD_INFO.txt
         echo "Architecture: arm64 (Apple Silicon)" >> build/output/BUILD_INFO.txt
         echo "" >> build/output/BUILD_INFO.txt
+        echo "Build Instructions:" >> build/output/BUILD_INFO.txt
+        echo "==================" >> build/output/BUILD_INFO.txt
+        echo "Full IPA builds require macOS runner with Xcode." >> build/output/BUILD_INFO.txt
+        echo "" >> build/output/BUILD_INFO.txt
+        echo "To build locally on your Mac:" >> build/output/BUILD_INFO.txt
+        echo "1. Clone: git clone https://github.com/anchdev/Anchsx2.git" >> build/output/BUILD_INFO.txt
+        echo "2. cd Anchsx2" >> build/output/BUILD_INFO.txt
+        echo "3. See docs/iOS_Build_Guide.md for full instructions" >> build/output/BUILD_INFO.txt
+        echo "" >> build/output/BUILD_INFO.txt
         echo "Installation Instructions:" >> build/output/BUILD_INFO.txt
-        echo "1. Download PCSX2-unsigned.ipa" >> build/output/BUILD_INFO.txt
-        echo "2. Open in LiveContainer app" >> build/output/BUILD_INFO.txt
-        echo "3. Install and run" >> build/output/BUILD_INFO.txt
+        echo "=========================" >> build/output/BUILD_INFO.txt
+        echo "1. Build IPA locally on macOS" >> build/output/BUILD_INFO.txt
+        echo "2. Download PCSX2-unsigned.ipa" >> build/output/BUILD_INFO.txt
+        echo "3. Open in LiveContainer app" >> build/output/BUILD_INFO.txt
+        echo "4. Install and run on iOS device" >> build/output/BUILD_INFO.txt
         echo "" >> build/output/BUILD_INFO.txt
         echo "Features:" >> build/output/BUILD_INFO.txt
         echo "- Metal GPU acceleration" >> build/output/BUILD_INFO.txt
@@ -108,12 +57,9 @@ jobs:
         echo "- iOS 14.0 or later" >> build/output/BUILD_INFO.txt
         echo "- iPhone and iPad" >> build/output/BUILD_INFO.txt
         echo "- All Apple Silicon devices recommended" >> build/output/BUILD_INFO.txt
-        echo "" >> build/output/BUILD_INFO.txt
-        echo "Note: This is an unsigned build for development/testing." >> build/output/BUILD_INFO.txt
-        echo "For production, use App Store or proper code signing." >> build/output/BUILD_INFO.txt
         cat build/output/BUILD_INFO.txt
 
-    - name: Upload IPA Artifact
+    - name: Upload Metadata Artifact
       uses: actions/upload-artifact@v4
       with:
         name: PCSX2-iOS-LiveContainer
@@ -124,9 +70,20 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: |
-          build/output/PCSX2-unsigned.ipa
-          build/output/BUILD_INFO.txt
+        files: build/output/BUILD_INFO.txt
+        body: |
+          PCSX2 iOS Build
+          
+          **For full IPA builds, see the [iOS Build Guide](https://github.com/anchdev/Anchsx2/blob/master/docs/iOS_Build_Guide.md)**
+          
+          Build locally on macOS:
+          ```bash
+          git clone https://github.com/anchdev/Anchsx2.git
+          cd Anchsx2
+          mkdir build && cd build
+          cmake -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DMETAL=ON ..
+          xcodebuild -scheme Pcsx2 -configuration Release -arch arm64 -sdk iphoneos
+          ```
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
