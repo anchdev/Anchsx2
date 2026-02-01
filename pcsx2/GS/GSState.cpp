@@ -1202,7 +1202,7 @@ void GSState::ApplyTEX0(GIFRegTEX0& TEX0)
 		// Urban Chaos writes to the memory backing the CLUT in the middle of a shuffle, and
 		// it's unclear whether the CLUT would actually get reloaded in that case.
 		if (TEX0.CBP != m_mem.m_clut.GetCLUTCBP())
-			m_channel_shuffle_abort = true;
+			m_channel_shuffle_finish = true;
 	}
 
 	TEX0.CPSM &= 0xa; // 1010b
@@ -1898,6 +1898,30 @@ void GSState::FlushWrite()
 	GSVector4i r;
 
 	r = m_tr.rect;
+
+	// If the end isn't where it said it would be, we need to calculate the end point.
+	// Star Wars - The Clone Wars just sets the rect to 16x4095 then YOLO's about half a page, then kills the transfer.
+	// If we just nuke the whole lot, even though nothing has been transferred, we risk killing data we don't mean to.
+	if (m_tr.end < m_tr.total && GSIsHardwareRenderer())
+	{
+		const GSLocalMemory::psm_t& psm_s = GSLocalMemory::m_psm[m_tr.m_blit.DPSM];
+		// Convert to nibbles then back to bytes after, in case trbpp is 4.
+		const u32 in_data_pixel_count = (((len * 2) + ((psm_s.trbpp / 4) - 1)) / (psm_s.trbpp / 4));
+		const u32 rect_pixel_count = r.width() * r.height();
+
+		if (rect_pixel_count > in_data_pixel_count)
+		{
+			const int calculated_height = ((in_data_pixel_count + (r.width() - 1)) / r.width());
+			
+			// Just setting the height should be okay...
+			r.w = std::max(r.y + calculated_height, psm_s.bs.y);
+
+			if (m_draw_transfers.size() > 0 && m_tr.m_blit.DBP == m_draw_transfers.back().blit.DBP)
+			{
+				m_draw_transfers.back().rect = r;
+			}
+		}
+	}
 
 	InvalidateVideoMem(m_env.BITBLTBUF, r);
 
@@ -3755,7 +3779,7 @@ GSState::PRIM_OVERLAP GSState::GetPrimitiveOverlapDrawlistImpl(bool save_drawlis
 	}
 
 	PRIM_OVERLAP overlap = PRIM_OVERLAP_NO;
-	bool check_quads = primclass == GS_TRIANGLE_CLASS;
+	bool check_quads = (primclass == GS_TRIANGLE_CLASS);
 
 	u32 i = 0;
 	u32 skip = 0; // Number of indices to skip if we have the bbox from the previous iteration.
@@ -3766,11 +3790,85 @@ GSState::PRIM_OVERLAP GSState::GetPrimitiveOverlapDrawlistImpl(bool save_drawlis
 	{
 		u32 j = i + skip;
 
+		skip = 0;
+
 		GSVector4i bbox(INT_MAX, INT_MAX, -INT_MAX, -INT_MAX);
 
 		while (j < count)
 		{
-			if (check_quads && j + 3 < count)
+			bool got_bbox = false;
+
+			// Assuming that indices 0-5 represent two triangles:
+			// Triangle strips: indices 1, 2 are identical to indices 3, 4. Indices 0, 5 are different.
+			// Triangles fans: indices 0, 2 are identical to indices 3, 4. Indices 1, 5 are different.
+			// Warning: this depends on how the vertices are arranged in the vertex kick.
+			// if that changes this detection will break.
+			constexpr std::array<std::array<std::array<int, 3>, 2>, 2> tri_order({
+				// Triangle strip expected indices.
+				std::array{ std::array<int, 3>{ 1, 2, 0 }, std::array<int, 3>{ 3, 4, 5 } },
+
+				// Triangle fan expected indices.
+				std::array{ std::array<int, 3>{ 0, 2, 1 }, std::array<int, 3>{ 3, 4, 5 } },
+			});
+
+			const auto CheckTriangleQuads = [&]<int type>() {
+				constexpr std::array<int, 3> tri0 = tri_order[type][0];
+				constexpr std::array<int, 3> tri1 = tri_order[type][1];
+
+				if (!got_bbox && primclass == GS_TRIANGLE_CLASS && j + 3 < count &&
+					index[j + tri0[0]] == index[j + tri1[0]] &&
+					index[j + tri0[1]] == index[j + tri1[1]])
+				{
+					// Get the initial triangle bbox.
+					bbox = GSVector4i(v[index[j + 0]].m[1]).upl16().xyxy();
+					bbox = bbox.runion(GSVector4i(v[index[j + 1]].m[1]).upl16().xyxy());
+					bbox = bbox.runion(GSVector4i(v[index[j + 2]].m[1]).upl16().xyxy());
+
+					while (true)
+					{
+						// There is a shared edge between this and next triangle.
+						// Check if the unshared point is on opposite sides of the shared edge.
+						const GSVector4i shared0 = GSVector4i(v[index[j + skip + tri0[0]]].m[1]).upl16();
+						const GSVector4i shared1 = GSVector4i(v[index[j + skip + tri0[1]]].m[1]).upl16() - shared0;
+						const GSVector4i unshared0 = GSVector4i(v[index[j + skip + tri0[2]]].m[1]).upl16() - shared0;
+						const GSVector4i unshared1 = GSVector4i(v[index[j + skip + tri1[2]]].m[1]).upl16() - shared0;
+
+						// Cross product signs comparison.
+						if ((unshared0.x * shared1.y - unshared0.y * shared1.x >= 0) ==
+							(unshared1.x * shared1.y - unshared1.y * shared1.x >= 0))
+						{
+							break; // Triangles are on same side of the shared edge so there's overlap.
+						}
+
+						// Corners are on opposite sides so we can assume a non-axis-aligned quad.
+						// Take union with the single unshared point.
+						bbox = bbox.runion(GSVector4i(v[index[j + skip + tri1[2]]].m[1]).upl16().xyxy());
+
+						skip += 3;
+
+						got_bbox = true;
+
+						if (!(j + skip + 3 < count &&
+							index[j + skip + tri0[0]] == index[j + skip + tri1[0]] &&
+							index[j + skip + tri0[1]] == index[j + skip + tri1[1]]))
+						{
+							// Cannot continue the strip/fan. Consume the last triangle and exit.
+							skip += 3;
+							break;
+						}
+					}
+				}
+			};
+
+			// First check: see if the triangles are part of triangle strip/fan.
+			if (primclass == GS_TRIANGLE_CLASS)
+			{
+				CheckTriangleQuads.template operator()<0>(); // Check triangle strips.
+				CheckTriangleQuads.template operator()<1>(); // Check triangle fans.
+			}
+
+			// Second check: see if triangles form an axis-aligned quad.
+			if (!got_bbox && primclass == GS_TRIANGLE_CLASS && check_quads && j + 3 < count)
 			{
 				const u16* RESTRICT idx0 = &index[j + 0];
 				const u16* RESTRICT idx1 = &index[j + 3];
@@ -3780,31 +3878,30 @@ GSState::PRIM_OVERLAP GSState::GetPrimitiveOverlapDrawlistImpl(bool save_drawlis
 				if (AreTrianglesQuad<0, 0>(v, idx0, idx1, &tri0, &tri1))
 				{
 					// tri.b is right angle corner
-					GSVector4i corner0 = GSVector4i(v[idx0[tri0.b]].m[1]).upl16().xyxy();
-					GSVector4i corner1 = GSVector4i(v[idx1[tri1.b]].m[1]).upl16().xyxy();
-					bbox = corner0.runion(corner1);
+					bbox = GSVector4i(v[idx0[tri0.b]].m[1]).upl16().xyxy();
+					bbox = bbox.runion(GSVector4i(v[idx1[tri1.b]].m[1]).upl16().xyxy());
 					
 					skip = 6;
+
+					got_bbox = true;
 				}
 				else
 				{
-					bbox = GSVector4i(v[index[j + 0]].m[1]).upl16().xyxy();
-					bbox = bbox.runion(GSVector4i(v[index[j + 1]].m[1]).upl16().xyxy());
-					bbox = bbox.runion(GSVector4i(v[index[j + 2]].m[1]).upl16().xyxy());
-
-					skip = 3;
-
-					// If we fail a quad check assume the rest are not quads.
+					// If we fail a quad check assume the rest are not quads since the check is relatively expensive.
 					check_quads = false;
 				}
 			}
-			else
+			
+			// Default case: just take the bbox of the prim vertices.
+			if (!got_bbox)
 			{
 				bbox = GSVector4i(v[GetIndex(j)].m[1]).upl16().xyxy();
 				for (int k = 1; k < n; k++) // Unroll
 					bbox = bbox.runion(GSVector4i(v[GetIndex(j + k)].m[1]).upl16().xyxy());
 
 				skip = n;
+
+				got_bbox = true;
 			}
 
 			// Avoid degenerate bbox.
@@ -5496,6 +5593,11 @@ bool GSState::IsOpaque()
 		return true;
 
 	const GSDrawingContext* context = m_context;
+	const u32 fmsk = GSLocalMemory::m_psm[context->FRAME.PSM].fmsk;
+
+	// If we aren't drawing color, it's equivilant to opaque.
+	if ((context->FRAME.FBMSK & fmsk) == (fmsk & 0x00FFFFFF))
+		return true;
 
 	int amin = 0;
 	int amax = 0xff;

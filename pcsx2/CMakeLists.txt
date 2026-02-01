@@ -830,6 +830,7 @@ set(pcsx2HostHeaders
 
 set(pcsx2ImGuiSources
 	ImGui/FullscreenUI.cpp
+	ImGui/FullscreenUI_Settings.cpp
 	ImGui/ImGuiFullscreen.cpp
 	ImGui/ImGuiManager.cpp
 	ImGui/ImGuiOverlays.cpp
@@ -837,6 +838,7 @@ set(pcsx2ImGuiSources
 
 set(pcsx2ImGuiHeaders
 	ImGui/FullscreenUI.h
+	ImGui/FullscreenUI_Internal.h
 	ImGui/ImGuiAnimated.h
 	ImGui/ImGuiFullscreen.h
 	ImGui/ImGuiManager.h
@@ -1306,6 +1308,12 @@ function(setup_main_executable target)
 		list(TRANSFORM SYMBOLS_TO_COPY REPLACE "[.]dll" ".pdb")
 		foreach(SYMBOL_TO_COPY ${SYMBOLS_TO_COPY})
 			install(FILES "${DEPS_BINDIR}/${SYMBOL_TO_COPY}" DESTINATION "${CMAKE_SOURCE_DIR}/bin" OPTIONAL)
+		endforeach()
+
+		set(AGILITY_DIR "${CMAKE_SOURCE_DIR}/deps/bin/D3D12")
+		set(AGILITY_DEPS_TO_COPY D3D12Core.dll d3d12SDKLayers.dll)
+		foreach(AGILITY_DEP_TO_COPY ${AGILITY_DEPS_TO_COPY})
+			install(FILES "${DEPS_BINDIR}/D3D12/${AGILITY_DEP_TO_COPY}" DESTINATION "${CMAKE_SOURCE_DIR}/bin/D3D12" OPTIONAL)
 		endforeach()
 
 		get_target_property(WINDEPLOYQT_EXE Qt6::windeployqt IMPORTED_LOCATION)

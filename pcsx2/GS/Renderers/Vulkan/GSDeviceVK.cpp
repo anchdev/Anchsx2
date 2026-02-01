@@ -481,72 +481,26 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 	vkGetPhysicalDeviceQueueFamilyProperties(m_physical_device, &queue_family_count, queue_family_properties.data());
 	DevCon.WriteLn("%u vulkan queue families", queue_family_count);
 
-	std::vector<uint32_t> queue_family_users(queue_family_count, 0);
-
+	// Find graphics and present queues.
 	m_graphics_queue_family_index = queue_family_count;
 	m_present_queue_family_index = queue_family_count;
-	u32 present_queue_index = 0;
 	m_spin_queue_family_index = queue_family_count;
 	u32 spin_queue_index = 0;
-
-	// Graphics Queue
 	for (uint32_t i = 0; i < queue_family_count; i++)
 	{
-		if (queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+		VkBool32 graphics_supported = queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT;
+		if (graphics_supported)
 		{
 			m_graphics_queue_family_index = i;
-			queue_family_users[i]++;
-			break;
+			// Quit now, no need for a present queue.
+			if (!surface)
+			{
+				break;
+			}
 		}
-	}
 
-	// Spinwait Queue
-	for (uint32_t i = 0; i < queue_family_count; i++)
-	{
-		if (queue_family_properties[i].queueCount == queue_family_users[i])
-			continue;
-		if (!(queue_family_properties[i].queueFlags & VK_QUEUE_COMPUTE_BIT))
-			continue;
-		if (queue_family_properties[i].timestampValidBits == 0)
-			continue; // We need timing
-
-		if (!(queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+		if (surface)
 		{
-			m_spin_queue_family_index = i;
-			break;
-		}
-		else if (m_spin_queue_family_index == queue_family_count)
-			m_spin_queue_family_index = i;
-	}
-
-	if (m_spin_queue_family_index != queue_family_count)
-	{
-		spin_queue_index = queue_family_users[m_spin_queue_family_index];
-		queue_family_users[m_spin_queue_family_index]++;
-		m_spin_queue_is_graphics_queue = false;
-	}
-	else
-	{
-		// No spare queue? Try the graphics queue.
-		if ((queue_family_properties[m_graphics_queue_family_index].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
-			(queue_family_properties[m_graphics_queue_family_index].timestampValidBits != 0))
-		{
-			m_spin_queue_family_index = m_graphics_queue_family_index;
-			spin_queue_index = 0;
-			m_spin_queue_is_graphics_queue = true;
-		}
-		else
-			m_spin_queue_is_graphics_queue = false;
-	}
-
-	// Present Queue
-	if (surface)
-	{
-		for (uint32_t i = 0; i < queue_family_count; i++)
-		{
-			if (queue_family_properties[i].queueCount == queue_family_users[i])
-				continue;
-
 			VkBool32 present_supported;
 			VkResult res = vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, i, surface, &present_supported);
 			if (res != VK_SUCCESS)
@@ -555,48 +509,35 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 				return false;
 			}
 
-			if (!present_supported)
-				continue;
-
-			// Perfer aync compute queue
-			if ((queue_family_properties[i].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
-				!(queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
-			{
-				m_present_queue_family_index = i;
-				break;
-			}
-			else if (m_present_queue_family_index == queue_family_count)
-				m_present_queue_family_index = i;
-		}
-
-		if (m_present_queue_family_index != queue_family_count)
-		{
-			present_queue_index = queue_family_users[m_present_queue_family_index];
-			queue_family_users[m_present_queue_family_index]++;
-		}
-		else
-		{
-			// No spare queue? Try the graphics queue.
-			VkBool32 present_supported;
-			VkResult res = vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, m_graphics_queue_family_index, surface, &present_supported);
-			if (res != VK_SUCCESS)
-			{
-				LOG_VULKAN_ERROR(res, "vkGetPhysicalDeviceSurfaceSupportKHR failed: ");
-				return false;
-			}
-
 			if (present_supported)
 			{
-				m_present_queue_family_index = m_graphics_queue_family_index;
-				present_queue_index = 0;
+				m_present_queue_family_index = i;
+			}
+
+			// Prefer one queue family index that does both graphics and present.
+			if (graphics_supported && present_supported)
+			{
+				break;
 			}
 		}
 	}
-
-	// Swap spin and present to simplify queue priorities logic.
-	if (!m_spin_queue_is_graphics_queue && m_present_queue_family_index == m_spin_queue_family_index)
-		std::swap(spin_queue_index, present_queue_index);
-
+	for (uint32_t i = 0; i < queue_family_count; i++)
+	{
+		// Pick a queue for spinning
+		if (!(queue_family_properties[i].queueFlags & VK_QUEUE_COMPUTE_BIT))
+			continue; // We need compute
+		if (queue_family_properties[i].timestampValidBits == 0)
+			continue; // We need timing
+		const bool queue_is_used = i == m_graphics_queue_family_index || i == m_present_queue_family_index;
+		if (queue_is_used && m_spin_queue_family_index != queue_family_count)
+			continue; // Found a non-graphics queue to use
+		spin_queue_index = 0;
+		m_spin_queue_family_index = i;
+		if (queue_is_used && queue_family_properties[i].queueCount > 1)
+			spin_queue_index = 1;
+		if (!(queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+			break; // Async compute queue, definitely pick this one
+	}
 	if (m_graphics_queue_family_index == queue_family_count)
 	{
 		Console.Error("VK: Failed to find an acceptable graphics queue.");
@@ -614,16 +555,14 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 	device_info.flags = 0;
 	device_info.queueCreateInfoCount = 0;
 
-	// Low priority for the spin queue
-	static constexpr float queue_priorities[] = {1.0f, 1.0f, 0.0f}; 
-
+	static constexpr float queue_priorities[] = {1.0f, 0.0f}; // Low priority for the spin queue
 	std::array<VkDeviceQueueCreateInfo, 3> queue_infos;
 	VkDeviceQueueCreateInfo& graphics_queue_info = queue_infos[device_info.queueCreateInfoCount++];
 	graphics_queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
 	graphics_queue_info.pNext = nullptr;
 	graphics_queue_info.flags = 0;
 	graphics_queue_info.queueFamilyIndex = m_graphics_queue_family_index;
-	graphics_queue_info.queueCount = queue_family_users[m_graphics_queue_family_index];
+	graphics_queue_info.queueCount = 1;
 	graphics_queue_info.pQueuePriorities = queue_priorities;
 
 	if (surface != VK_NULL_HANDLE && m_graphics_queue_family_index != m_present_queue_family_index)
@@ -633,19 +572,19 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 		present_queue_info.pNext = nullptr;
 		present_queue_info.flags = 0;
 		present_queue_info.queueFamilyIndex = m_present_queue_family_index;
-		present_queue_info.queueCount = queue_family_users[m_present_queue_family_index];
+		present_queue_info.queueCount = 1;
 		present_queue_info.pQueuePriorities = queue_priorities;
 	}
 
 	if (m_spin_queue_family_index == m_graphics_queue_family_index)
 	{
-		if (spin_queue_index == 1)
-			graphics_queue_info.pQueuePriorities = queue_priorities + 1;
+		if (spin_queue_index != 0)
+			graphics_queue_info.queueCount = 2;
 	}
 	else if (m_spin_queue_family_index == m_present_queue_family_index)
 	{
-		if (spin_queue_index == 1)
-			queue_infos[1].pQueuePriorities = queue_priorities + 1;
+		if (spin_queue_index != 0)
+			queue_infos[1].queueCount = 2; // present queue
 	}
 	else if (m_spin_queue_family_index != queue_family_count)
 	{
@@ -655,7 +594,7 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 		spin_queue_info.flags = 0;
 		spin_queue_info.queueFamilyIndex = m_spin_queue_family_index;
 		spin_queue_info.queueCount = 1;
-		spin_queue_info.pQueuePriorities = queue_priorities + 2;
+		spin_queue_info.pQueuePriorities = queue_priorities + 1;
 	}
 
 	device_info.pQueueCreateInfos = queue_infos.data();
@@ -744,11 +683,13 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 	vkGetDeviceQueue(m_device, m_graphics_queue_family_index, 0, &m_graphics_queue);
 	if (surface)
 	{
-		vkGetDeviceQueue(m_device, m_present_queue_family_index, present_queue_index, &m_present_queue);
+		vkGetDeviceQueue(m_device, m_present_queue_family_index, 0, &m_present_queue);
 	}
 	m_spinning_supported = m_spin_queue_family_index != queue_family_count &&
 	                       queue_family_properties[m_graphics_queue_family_index].timestampValidBits > 0 &&
 	                       m_device_properties.limits.timestampPeriod > 0;
+	m_spin_queue_is_graphics_queue =
+		m_spin_queue_family_index == m_graphics_queue_family_index && spin_queue_index == 0;
 
 	m_gpu_timing_supported = (m_device_properties.limits.timestampComputeAndGraphics != 0 &&
 							  queue_family_properties[m_graphics_queue_family_index].timestampValidBits > 0 &&
@@ -1354,7 +1295,7 @@ void GSDeviceVK::SubmitCommandBuffer(VKSwapChain* present_swap_chain)
 
 		present_swap_chain->ResetImageAcquireResult();
 
-		const VkResult res = vkQueuePresentKHR(m_present_queue, &present_info);
+		res = vkQueuePresentKHR(m_present_queue, &present_info);
 		if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
 		{
 			// VK_ERROR_OUT_OF_DATE_KHR is not fatal, just means we need to recreate our swap chain.
@@ -2988,6 +2929,8 @@ void GSDeviceVK::DrawMultiStretchRects(
 void GSDeviceVK::DoMultiStretchRects(
 	const MultiStretchRect* rects, u32 num_rects, GSTextureVK* dTex, ShaderConvert shader)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	// Set up vertices first.
 	const u32 vertex_reserve_size = num_rects * 4 * sizeof(GSVertexPT1);
 	const u32 index_reserve_size = num_rects * 6 * sizeof(u16);
@@ -3141,6 +3084,8 @@ void GSDeviceVK::DoStretchRect(GSTextureVK* sTex, const GSVector4& sRect, GSText
 
 void GSDeviceVK::DrawStretchRect(const GSVector4& sRect, const GSVector4& dRect, const GSVector2i& ds)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	// ia
 	const float left = dRect.x * 2 / ds.x - 1.0f;
 	const float top = 1.0f - dRect.y * 2 / ds.y;
@@ -3190,7 +3135,7 @@ void GSDeviceVK::UpdateCLUTTexture(
 	GSTexture* sTex, float sScale, u32 offsetX, u32 offsetY, GSTexture* dTex, u32 dOffset, u32 dSize)
 {
 	// Super annoying, but apparently NVIDIA doesn't like floats/ints packed together in the same vec4?
-	struct Uniforms
+	struct alignas(16) Uniforms
 	{
 		u32 offsetX, offsetY, dOffset, pad1;
 		float scale;
@@ -3209,7 +3154,7 @@ void GSDeviceVK::UpdateCLUTTexture(
 void GSDeviceVK::ConvertToIndexedTexture(
 	GSTexture* sTex, float sScale, u32 offsetX, u32 offsetY, u32 SBW, u32 SPSM, GSTexture* dTex, u32 DBW, u32 DPSM)
 {
-	struct Uniforms
+	struct alignas(16) Uniforms
 	{
 		u32 SBW;
 		u32 DBW;
@@ -3230,7 +3175,7 @@ void GSDeviceVK::ConvertToIndexedTexture(
 
 void GSDeviceVK::FilteredDownsampleTexture(GSTexture* sTex, GSTexture* dTex, u32 downsample_factor, const GSVector2i& clamp_min, const GSVector4& dRect)
 {
-	struct Uniforms
+	struct alignas(16) Uniforms
 	{
 		GSVector2i clamp_min;
 		int downsample_factor;
@@ -4493,16 +4438,13 @@ void GSDeviceVK::RenderImGui()
 
 	UpdateImGuiTextures();
 
-	const float uniforms[2][2] = {{
-									  2.0f / static_cast<float>(m_window_info.surface_width),
-									  2.0f / static_cast<float>(m_window_info.surface_height),
-								  },
-		{
-			-1.0f,
-			-1.0f,
-		}};
+	const GSVector4 uniforms(
+		2.0f / static_cast<float>(m_window_info.surface_width),
+		2.0f / static_cast<float>(m_window_info.surface_height),
+		-1.0f,
+		-1.0f);
 
-	SetUtilityPushConstants(uniforms, sizeof(uniforms));
+	SetUtilityPushConstants(&uniforms, sizeof(uniforms));
 	SetPipeline(m_imgui_pipeline);
 
 	if (m_utility_sampler != m_linear_sampler)
@@ -5530,6 +5472,8 @@ void GSDeviceVK::SetPSConstantBuffer(const GSHWDrawConfig::PSConstantBuffer& cb)
 
 void GSDeviceVK::SetupDATE(GSTexture* rt, GSTexture* ds, SetDATM datm, const GSVector4i& bbox)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	GL_PUSH("SetupDATE {%d,%d} %dx%d", bbox.left, bbox.top, bbox.width(), bbox.height());
 
 	const GSVector2i size(ds->GetSize());
@@ -5557,6 +5501,8 @@ void GSDeviceVK::SetupDATE(GSTexture* rt, GSTexture* ds, SetDATM datm, const GSV
 
 GSTextureVK* GSDeviceVK::SetupPrimitiveTrackingDATE(GSHWDrawConfig& config)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	// How this is done:
 	// - can't put a barrier for the image in the middle of the normal render pass, so that's out
 	// - so, instead of just filling the int texture with INT_MAX, we sample the RT and use -1 for failing values
@@ -5738,7 +5684,6 @@ void GSDeviceVK::RenderHW(GSHWDrawConfig& config)
 			SetPipeline(m_colclip_finish_pipelines[pipe.ds][pipe.IsRTFeedbackLoop()]);
 			SetUtilityTexture(colclip_rt, m_point_sampler);
 			DrawStretchRect(sRect, drawareaf, rtsize);
-			g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 
 			Recycle(colclip_rt);
 			g_gs_device->SetColorClipTexture(nullptr);
@@ -5955,7 +5900,6 @@ void GSDeviceVK::RenderHW(GSHWDrawConfig& config)
 		const GSVector4 drawareaf = GSVector4((config.colclip_mode == GSHWDrawConfig::ColClipMode::ConvertOnly) ? GSVector4i::loadh(rtsize) : config.drawarea);
 		const GSVector4 sRect(drawareaf / GSVector4(rtsize).xyxy());
 		DrawStretchRect(sRect, drawareaf, rtsize);
-		g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 
 		GL_POP();
 		OMSetRenderTargets(draw_rt, draw_ds, config.scissor, static_cast<FeedbackLoopFlag>(pipe.feedback_loop_flags));
@@ -6057,7 +6001,6 @@ void GSDeviceVK::RenderHW(GSHWDrawConfig& config)
 			SetPipeline(m_colclip_finish_pipelines[pipe.ds][pipe.IsRTFeedbackLoop()]);
 			SetUtilityTexture(colclip_rt, m_point_sampler);
 			DrawStretchRect(sRect, drawareaf, rtsize);
-			g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 
 			Recycle(colclip_rt);
 			g_gs_device->SetColorClipTexture(nullptr);

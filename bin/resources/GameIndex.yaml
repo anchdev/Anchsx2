@@ -2075,6 +2075,8 @@ SCAJ-20128:
 SCAJ-20129:
   name: "Ponkotsu Roman Daikatsugeki Bumpy Trot"
   region: "NTSC-Unk"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -4764,6 +4766,9 @@ SCES-50034:
   name: "MotoGP"
   region: "PAL-M5"
   compat: 5
+  gsHWFixes:
+    gpuTargetCLUT: 2 # Fixes some (haze?) shuffle colors.
+    textureInsideRT: 1 # Fixes rendering artifacts on racers.
 SCES-50105:
   name: "Sky Odyssey"
   region: "PAL-M5"
@@ -7611,6 +7616,8 @@ SCKA-20058:
   name: "액션 로망 범피 트롯"
   name-en: "Action Romance Bumpy Trot"
   region: "NTSC-K"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -24774,6 +24781,11 @@ SLES-53820:
 SLES-53821:
   name: "Radio Helicopter II"
   region: "PAL-E"
+  patches:
+    9A695202:
+      content: |-
+        comment=Patch that nops a branch instruction causing a freeze.
+        patch=1,EE,001799AC,word,00000000
 SLES-53824:
   name: "Trapt"
   region: "PAL-E"
@@ -25575,6 +25587,8 @@ SLES-54137:
 SLES-54138:
   name: "Steambot Chronicles"
   region: "PAL-E"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -26225,6 +26239,8 @@ SLES-54333:
 SLES-54335:
   name: "Steambot Chronicles"
   region: "PAL-F"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -35850,6 +35866,8 @@ SLPM-60255:
   name-sort: "ぽんこつろまんだいかつげきばんぴーとろっと [たいけんばん]"
   name-en: "Ponkotsu Roeman Daikatsugeki Bumpy Trot [Trial]"
   region: "NTSC-J"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -35921,6 +35939,8 @@ SLPM-60266:
   name-sort: "ぽんこつろまんだいかつげきばんぴーとろっと [たいけんばん]"
   name-en: "Ponkotsu Roeman Daikatsugeki Bumpy Trot [Trial]"
   region: "NTSC-J"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -40074,6 +40094,11 @@ SLPM-62624:
   name-sort: "ぷちこぷたー2"
   name-en: "Petit Copter 2"
   region: "NTSC-J"
+  patches:
+    9A695202:
+      content: |-
+        comment=Patch that nops a branch instruction causing a freeze.
+        patch=1,EE,001799B8,word,00000000
 SLPM-62625:
   name: "鬼浜爆走愚連隊 激闘編"
   name-sort: "おにはまばくそうぐれんたい げきとうへん"
@@ -54743,6 +54768,9 @@ SLPS-20040:
   name-sort: "もとGP"
   name-en: "MotoGP"
   region: "NTSC-J"
+  gsHWFixes:
+    gpuTargetCLUT: 2 # Fixes some (haze?) shuffle colors.
+    textureInsideRT: 1 # Fixes rendering artifacts on racers.
 SLPS-20041:
   name: "麻雀悟空 大聖"
   name-sort: "まーじゃんごくう たいせい"
@@ -59818,6 +59846,8 @@ SLPS-25457:
   name-sort: "ぽんこつろまんだいかつげきばんぴーとろっと"
   name-en: "Ponkotsu Roeman Daikatsugeki Bumpy Trot"
   region: "NTSC-J"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -61222,6 +61252,8 @@ SLPS-25683:
   name-sort: "ぽんこつろまんだいかつげきばんぴーとろっと [Irem COLLECTION]"
   name-en: "Ponkotsu Roman Daikatsugeki Bumpy Trot [Irem Collection]"
   region: "NTSC-J"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -64229,6 +64261,9 @@ SLUS-20058:
   name: "MotoGP"
   region: "NTSC-U"
   compat: 5
+  gsHWFixes:
+    gpuTargetCLUT: 2 # Fixes some (haze?) shuffle colors.
+    textureInsideRT: 1 # Fixes rendering artifacts on racers.
 SLUS-20062:
   name: "Grand Theft Auto III"
   region: "NTSC-U"
@@ -71351,6 +71386,8 @@ SLUS-21344:
   name: "Steambot Chronicles"
   region: "NTSC-U"
   compat: 5
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -74892,6 +74929,8 @@ SLUS-28059:
 SLUS-28061:
   name: "Steambot Chronicles [Trade Demo]"
   region: "NTSC-U"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.
@@ -75670,6 +75709,8 @@ SLUS-29185:
 SLUS-29188:
   name: "Steambot Chronicles [Regular Demo]"
   region: "NTSC-U"
+  roundModes:
+    eeRoundMode: 0 # Fixes broken load triggers.
   gsHWFixes:
     getSkipCount: "GSC_IRem"
     halfPixelOffset: 2 # Aligns effects.

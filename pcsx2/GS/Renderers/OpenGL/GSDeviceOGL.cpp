@@ -770,6 +770,11 @@ bool GSDeviceOGL::CheckFeatures()
 		m_features.line_expand ? "hardware" : (m_features.vs_expand ? "vertex expanding" : "UNSUPPORTED"),
 		m_features.vs_expand ? "vertex expanding" : "CPU");
 
+	if (!GLAD_GL_ARB_conservative_depth)
+	{
+		Console.Warning("GLAD_GL_ARB_conservative_depth is not supported. This will reduce performance.");
+	}
+
 	return true;
 }
 
@@ -1293,6 +1298,16 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 	else
 		header += "#define HAS_FRAMEBUFFER_FETCH 0\n";
 
+	if (GLAD_GL_ARB_conservative_depth)
+	{
+		header += "#extension GL_ARB_conservative_depth : enable\n";
+		header += "#define PS_HAS_CONSERVATIVE_DEPTH 1\n";
+	}
+	else
+	{
+		header += "#define PS_HAS_CONSERVATIVE_DEPTH 0\n";
+	}
+
 	// Allow to puts several shader in 1 files
 	switch (type)
 	{
@@ -1408,10 +1423,11 @@ std::string GSDeviceOGL::GetPSSource(const PSSelector& sel)
 // Copy a sub part of texture (same as below but force a conversion)
 void GSDeviceOGL::BlitRect(GSTexture* sTex, const GSVector4i& r, const GSVector2i& dsize, bool at_origin, bool linear)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	CommitClear(sTex, true);
 
 	GL_PUSH(fmt::format("CopyRectConv from {}", static_cast<GSTextureOGL*>(sTex)->GetID()).c_str());
-	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 
 	// NOTE: This previously used glCopyTextureSubImage2D(), but this appears to leak memory in
 	// the loading screens of Evolution Snowboarding in Intel/NVIDIA drivers.
@@ -1642,6 +1658,8 @@ void GSDeviceOGL::FilteredDownsampleTexture(GSTexture* sTex, GSTexture* dTex, u3
 
 void GSDeviceOGL::DrawStretchRect(const GSVector4& sRect, const GSVector4& dRect, const GSVector2i& ds)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	// Original code from DX
 	const float left = dRect.x * 2 / ds.x - 1.0f;
 	const float right = dRect.z * 2 / ds.x - 1.0f;
@@ -1712,6 +1730,8 @@ void GSDeviceOGL::DrawMultiStretchRects(
 
 void GSDeviceOGL::DoMultiStretchRects(const MultiStretchRect* rects, u32 num_rects, const GSVector2& ds)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	const u32 vertex_reserve_size = num_rects * 4 * sizeof(GSVertexPT1);
 	const u32 index_reserve_size = num_rects * 6 * sizeof(u16);
 	auto vertex_map = m_vertex_stream_buffer->Map(sizeof(GSVertexPT1), vertex_reserve_size);
@@ -1907,6 +1927,8 @@ void GSDeviceOGL::DoShadeBoost(GSTexture* sTex, GSTexture* dTex, const float par
 
 void GSDeviceOGL::SetupDATE(GSTexture* rt, GSTexture* ds, SetDATM datm, const GSVector4i& bbox)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	GL_PUSH("DATE First Pass");
 
 	// sfex3 (after the capcom logo), vf4 (first menu fading in), ffxii shadows, rumble roses shadows, persona4 shadows
@@ -2443,7 +2465,6 @@ void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 			const GSVector4 dRect(config.colclip_update_area);
 			const GSVector4 sRect = dRect / GSVector4(size.x, size.y).xyxy();
 			StretchRect(colclip_rt, sRect, config.rt, dRect, ShaderConvert::COLCLIP_RESOLVE, false);
-			g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 			Recycle(colclip_rt);
 
 			g_gs_device->SetColorClipTexture(nullptr);
@@ -2478,7 +2499,6 @@ void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 			const GSVector4 dRect = GSVector4((config.colclip_mode == GSHWDrawConfig::ColClipMode::ConvertOnly) ? GSVector4i::loadh(rtsize) : config.drawarea);
 			const GSVector4 sRect = dRect / GSVector4(rtsize.x, rtsize.y).xyxy();
 			StretchRect(config.rt, sRect, colclip_rt, dRect, ShaderConvert::COLCLIP_INIT, false);
-			g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 		}
 	}
 
@@ -2747,7 +2767,6 @@ void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 			const GSVector4 dRect(config.colclip_update_area);
 			const GSVector4 sRect = dRect / GSVector4(size.x, size.y).xyxy();
 			StretchRect(colclip_rt, sRect, config.rt, dRect, ShaderConvert::COLCLIP_RESOLVE, false);
-			g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 			Recycle(colclip_rt);
 
 			g_gs_device->SetColorClipTexture(nullptr);

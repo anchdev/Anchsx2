@@ -38,6 +38,15 @@ static bool SupportsTextureFormat(ID3D11Device* dev, DXGI_FORMAT format)
 	return (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) != 0;
 }
 
+static bool IsTextureFormatHWBlendable(ID3D11Device* dev, DXGI_FORMAT format)
+{
+	UINT support;
+	if (FAILED(dev->CheckFormatSupport(format, &support)))
+		return false;
+
+	return (support & D3D11_FORMAT_SUPPORT_RENDER_TARGET) && (support & D3D11_FORMAT_SUPPORT_BLENDABLE);
+}
+
 GSDevice11::GSDevice11()
 {
 	memset(&m_state, 0, sizeof(m_state));
@@ -599,6 +608,15 @@ void GSDevice11::SetFeatures(IDXGIAdapter1* adapter)
 	m_max_texture_size = (m_feature_level >= D3D_FEATURE_LEVEL_11_0) ?
 	                         D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION :
 	                         D3D10_REQ_TEXTURE2D_U_OR_V_DIMENSION;
+
+	m_conservative_depth = (m_feature_level >= D3D_FEATURE_LEVEL_11_0);
+	m_rgba16_unorm_hw_blend = IsTextureFormatHWBlendable(m_dev.get(), DXGI_FORMAT_R16G16B16A16_UNORM);
+
+	// Let the user know if said features are available.
+	Console.WriteLnFmt("D3D11: DXTn Texture Compression: {}", m_features.dxt_textures ? "Supported" : "Not Supported");
+	Console.WriteLnFmt("D3D11: BC6/7 Texture Compression: {}", m_features.bptc_textures ? "Supported" : "Not Supported");
+	Console.WriteLnFmt("D3D11: Conservative Depth: {}", m_conservative_depth ? "Supported" : "Not Supported");
+	Console.WriteLnFmt("D3D11: RGBA16 UNORM Hardware Blending: {}", m_rgba16_unorm_hw_blend ? "Supported" : "Not Supported");
 }
 
 bool GSDevice11::HasSurface() const
@@ -972,15 +990,15 @@ void GSDevice11::EndPresent()
 	if (m_vsync_mode != GSVSyncMode::FIFO && m_gpu_timing_enabled)
 		PopTimestampQuery();
 
+	// clear out the swap chain view, it might get resized..
+	OMSetRenderTargets(nullptr, nullptr, nullptr, nullptr);
+
 	const UINT sync_interval = static_cast<UINT>(m_vsync_mode == GSVSyncMode::FIFO);
 	const UINT flags = (m_vsync_mode == GSVSyncMode::Disabled && m_using_allow_tearing) ? DXGI_PRESENT_ALLOW_TEARING : 0;
 	m_swap_chain->Present(sync_interval, flags);
 
 	if (m_gpu_timing_enabled)
 		KickTimestampQuery();
-
-	// clear out the swap chain view, it might get resized..
-	OMSetRenderTargets(nullptr, nullptr, nullptr, nullptr);
 }
 
 bool GSDevice11::CreateTimestampQueries()
@@ -1296,6 +1314,8 @@ void GSDevice11::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSTextur
 
 void GSDevice11::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect, ID3D11PixelShader* ps, ID3D11Buffer* ps_cb, ID3D11BlendState* bs, bool linear)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	CommitClear(sTex);
 
 	const bool draw_in_depth = dTex && dTex->IsDepthStencil();
@@ -1303,6 +1323,10 @@ void GSDevice11::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSTextur
 	GSVector2i ds;
 	if (dTex)
 	{
+		// preemptively bind svr if possible
+		if (m_state.cached_rt_view != sTex && m_state.cached_dsv != sTex)
+			PSSetShaderResource(0, sTex);
+
 		// ps unbind conflicting srvs
 		PSUnbindConflictingSRVs(dTex);
 
@@ -1363,11 +1387,17 @@ void GSDevice11::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSTextur
 
 void GSDevice11::PresentRect(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect, PresentShader shader, float shaderTime, bool linear)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	CommitClear(sTex);
 
 	GSVector2i ds;
 	if (dTex)
 	{
+		// preemptively bind svr if possible
+		if (m_state.cached_rt_view != sTex && m_state.cached_dsv != sTex)
+			PSSetShaderResource(0, sTex);
+
 		// ps unbind conflicting srvs
 		PSUnbindConflictingSRVs(dTex);
 
@@ -1397,7 +1427,7 @@ void GSDevice11::PresentRect(GSTexture* sTex, const GSVector4& sRect, GSTexture*
 	const float right = dRect.z * 2 / ds.x - 1.0f;
 	const float bottom = 1.0f - dRect.w * 2 / ds.y;
 
-	GSVertexPT1 vertices[] =
+	const GSVertexPT1 vertices[] =
 	{
 		{GSVector4(left, top, 0.5f, 1.0f), GSVector2(sRect.x, sRect.y)},
 		{GSVector4(right, top, 0.5f, 1.0f), GSVector2(sRect.z, sRect.y)},
@@ -1427,13 +1457,14 @@ void GSDevice11::PresentRect(GSTexture* sTex, const GSVector4& sRect, GSTexture*
 void GSDevice11::UpdateCLUTTexture(GSTexture* sTex, float sScale, u32 offsetX, u32 offsetY, GSTexture* dTex, u32 dOffset, u32 dSize)
 {
 	// match merge cb
-	struct Uniforms
+	struct alignas(16) Uniforms
 	{
 		float scale;
 		float pad1[3];
 		u32 offsetX, offsetY, dOffset;
+		u32 pad2;
 	};
-	const Uniforms cb = {sScale, {}, offsetX, offsetY, dOffset};
+	const Uniforms cb = {sScale, {}, offsetX, offsetY, dOffset, 0};
 	m_ctx->UpdateSubresource(m_merge.cb.get(), 0, nullptr, &cb, 0, 0);
 
 	const GSVector4 dRect(0, 0, dSize, 1);
@@ -1444,14 +1475,15 @@ void GSDevice11::UpdateCLUTTexture(GSTexture* sTex, float sScale, u32 offsetX, u
 void GSDevice11::ConvertToIndexedTexture(GSTexture* sTex, float sScale, u32 offsetX, u32 offsetY, u32 SBW, u32 SPSM, GSTexture* dTex, u32 DBW, u32 DPSM)
 {
 	// match merge cb
-	struct Uniforms
+	struct alignas(16) Uniforms
 	{
 		float scale;
 		float pad1[3];
 		u32 SBW, DBW, SPSM;
+		u32 pad2;
 	};
 
-	const Uniforms cb = {sScale, {}, SBW, DBW, SPSM};
+	const Uniforms cb = {sScale, {}, SBW, DBW, SPSM, 0};
 	m_ctx->UpdateSubresource(m_merge.cb.get(), 0, nullptr, &cb, 0, 0);
 
 	const GSVector4 dRect(0, 0, dTex->GetWidth(), dTex->GetHeight());
@@ -1461,7 +1493,7 @@ void GSDevice11::ConvertToIndexedTexture(GSTexture* sTex, float sScale, u32 offs
 
 void GSDevice11::FilteredDownsampleTexture(GSTexture* sTex, GSTexture* dTex, u32 downsample_factor, const GSVector2i& clamp_min, const GSVector4& dRect)
 {
-	struct Uniforms
+	struct alignas(16) Uniforms
 	{
 		float weight;
 		float step_multiplier;
@@ -1520,6 +1552,8 @@ void GSDevice11::DrawMultiStretchRects(const MultiStretchRect* rects, u32 num_re
 
 void GSDevice11::DoMultiStretchRects(const MultiStretchRect* rects, u32 num_rects, const GSVector2& ds)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	// Don't use primitive restart here, it ends up slower on some drivers.
 	const u32 vertex_reserve_size = num_rects * 4;
 	const u32 index_reserve_size = num_rects * 6;
@@ -1719,6 +1753,7 @@ void GSDevice11::SetupPS(const PSSelector& sel, const GSHWDrawConfig::PSConstant
 		ShaderMacro sm;
 
 		sm.AddMacro("PIXEL_SHADER", 1);
+		sm.AddMacro("PS_HAS_CONSERVATIVE_DEPTH", m_conservative_depth);
 		sm.AddMacro("PS_FST", sel.fst);
 		sm.AddMacro("PS_WMS", sel.wms);
 		sm.AddMacro("PS_WMT", sel.wmt);
@@ -2063,13 +2098,13 @@ void GSDevice11::RenderImGui()
 
 	UpdateImGuiTextures();
 
-	const float L = 0.0f;
+	constexpr float L = 0.0f;
 	const float R = static_cast<float>(m_window_info.surface_width);
-	const float T = 0.0f;
+	constexpr float T = 0.0f;
 	const float B = static_cast<float>(m_window_info.surface_height);
 
 	// clang-format off
-  const float ortho_projection[4][4] =
+	const GSVector4 ortho_projection[4] =
 	{
 		{ 2.0f/(R-L),   0.0f,           0.0f,       0.0f },
 		{ 0.0f,         2.0f/(T-B),     0.0f,       0.0f },
@@ -2160,12 +2195,19 @@ void GSDevice11::RenderImGui()
 
 void GSDevice11::SetupDATE(GSTexture* rt, GSTexture* ds, SetDATM datm, const GSVector4i& bbox)
 {
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
 	// sfex3 (after the capcom logo), vf4 (first menu fading in), ffxii shadows, rumble roses shadows, persona4 shadows
 
 	CommitClear(rt);
 	CommitClear(ds);
 
 	m_ctx->ClearDepthStencilView(*static_cast<GSTexture11*>(ds), D3D11_CLEAR_STENCIL, 0.0f, 0);
+
+	// preemptively bind svr if possible
+
+	if (m_state.cached_rt_view != rt && m_state.cached_dsv != rt)
+		PSSetShaderResource(0, rt);
 
 	// ps unbind conflicting srvs
 
@@ -2380,6 +2422,7 @@ void GSDevice11::VSSetShader(ID3D11VertexShader* vs, ID3D11Buffer* vs_cb)
 
 void GSDevice11::PSSetShaderResource(int i, GSTexture* sr)
 {
+	// Update local state only, PSUpdateShaderState updates gpu state.
 	m_state.ps_sr_views[i] = *static_cast<GSTexture11*>(sr);
 }
 
@@ -2416,7 +2459,7 @@ void GSDevice11::PSUpdateShaderState(const bool sr_update, const bool ss_update)
 	if (sr_update)
 	{
 		bool sr_changed = false;
-		for (size_t i = 0; i < m_state.ps_sr_views.size(); ++i)
+		for (size_t i = 0; i < MAX_TEXTURES; ++i)
 		{
 			if (m_state.ps_cached_sr_views[i] != m_state.ps_sr_views[i])
 			{
@@ -2428,14 +2471,14 @@ void GSDevice11::PSUpdateShaderState(const bool sr_update, const bool ss_update)
 		if (sr_changed)
 		{
 			m_state.ps_cached_sr_views = m_state.ps_sr_views;
-			m_ctx->PSSetShaderResources(0, m_state.ps_sr_views.size(), m_state.ps_sr_views.data());
+			m_ctx->PSSetShaderResources(0, MAX_TEXTURES, m_state.ps_sr_views.data());
 		}
 	}
 
 	if (ss_update)
 	{
 		bool ss_changed = false;
-		for (size_t i = 0; i < m_state.ps_ss.size(); ++i)
+		for (size_t i = 0; i < MAX_SAMPLERS; ++i)
 		{
 			if (m_state.ps_cached_ss[i] != m_state.ps_ss[i])
 			{
@@ -2447,7 +2490,7 @@ void GSDevice11::PSUpdateShaderState(const bool sr_update, const bool ss_update)
 		if (ss_changed)
 		{
 			m_state.ps_cached_ss = m_state.ps_ss;
-			m_ctx->PSSetSamplers(0, m_state.ps_ss.size(), m_state.ps_ss.data());
+			m_ctx->PSSetSamplers(0, MAX_SAMPLERS, m_state.ps_ss.data());
 		}
 	}
 }
@@ -2456,9 +2499,10 @@ void GSDevice11::PSUnbindConflictingSRVs(GSTexture* tex1, GSTexture* tex2)
 {
 	// Make sure no SRVs are bound using the same texture before binding it to a RTV.
 	bool changed = false;
-	for (size_t i = 0; i < m_state.ps_sr_views.size(); i++)
+	for (size_t i = 0; i < MAX_TEXTURES; i++)
 	{
-		if ((tex1 && m_state.ps_sr_views[i] == *static_cast<GSTexture11*>(tex1)) || (tex2 && m_state.ps_sr_views[i] == *static_cast<GSTexture11*>(tex2)))
+		// We chech against what's currently bound (cached_sr_views), then update local state (ps_sr_views) which calls PSUpdateShaderState to update gpu state.
+		if ((tex1 && m_state.ps_cached_sr_views[i] == *static_cast<GSTexture11*>(tex1)) || (tex2 && m_state.ps_cached_sr_views[i] == *static_cast<GSTexture11*>(tex2)))
 		{
 			m_state.ps_sr_views[i] = nullptr;
 			changed = true;
@@ -2602,7 +2646,6 @@ void GSDevice11::RenderHW(GSHWDrawConfig& config)
 			const GSVector4 dRect(config.colclip_update_area);
 			const GSVector4 sRect = dRect / GSVector4(size.x, size.y).xyxy();
 			StretchRect(colclip_rt, sRect, config.rt, dRect, ShaderConvert::COLCLIP_RESOLVE, false);
-			g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 			Recycle(colclip_rt);
 
 			g_gs_device->SetColorClipTexture(nullptr);
@@ -2619,7 +2662,7 @@ void GSDevice11::RenderHW(GSHWDrawConfig& config)
 		{
 			config.colclip_update_area = config.drawarea;
 
-			colclip_rt = CreateRenderTarget(rtsize.x, rtsize.y, GSTexture::Format::ColorClip, false);
+			colclip_rt = CreateRenderTarget(rtsize.x, rtsize.y, m_rgba16_unorm_hw_blend ? GSTexture::Format::ColorClip : GSTexture::Format::ColorHDR, false);
 			if (!colclip_rt)
 			{
 				Console.Warning("D3D11: Failed to allocate ColorClip render target, aborting draw.");
@@ -2631,7 +2674,6 @@ void GSDevice11::RenderHW(GSHWDrawConfig& config)
 			const GSVector4 dRect = GSVector4((config.colclip_mode == GSHWDrawConfig::ColClipMode::ConvertOnly) ? GSVector4i::loadh(rtsize) : config.drawarea);
 			const GSVector4 sRect = dRect / GSVector4(rtsize.x, rtsize.y).xyxy();
 			StretchRect(config.rt, sRect, colclip_rt, dRect, ShaderConvert::COLCLIP_INIT, false);
-			g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 		}
 	}
 
@@ -2702,19 +2744,28 @@ void GSDevice11::RenderHW(GSHWDrawConfig& config)
 	if (config.tex && config.tex == config.ds)
 		read_only_dsv = static_cast<GSTexture11*>(config.ds)->ReadOnlyDepthStencilView();
 
-	// Should be called before changing local srv state.
-	PSUnbindConflictingSRVs(colclip_rt ? colclip_rt : config.rt, read_only_dsv ? nullptr : config.ds);
-
+	// Preemptively bind svr if possible.
+	// We update the local state, then if there are srv conflicts PSUnbindConflictingSRVs will update the gpu state.
 	if (config.tex)
 	{
 		CommitClear(config.tex);
-		PSSetShaderResource(0, config.tex);
+		if (m_state.cached_rt_view != config.tex && m_state.cached_dsv != config.tex)
+			PSSetShaderResource(0, config.tex);
 	}
 	if (config.pal)
 	{
 		CommitClear(config.pal);
-		PSSetShaderResource(1, config.pal);
+		if (m_state.cached_rt_view != config.pal && m_state.cached_dsv != config.pal)
+			PSSetShaderResource(1, config.pal);
 	}
+
+	// Should be called before changing current gpu state.
+	PSUnbindConflictingSRVs(colclip_rt ? colclip_rt : config.rt, read_only_dsv ? nullptr : config.ds);
+
+	if (config.tex)
+		PSSetShaderResource(0, config.tex);
+	if (config.pal)
+		PSSetShaderResource(1, config.pal);
 
 	SetupVS(config.vs, &config.cb_vs);
 	SetupPS(config.ps, &config.cb_ps, config.sampler);
@@ -2816,7 +2867,6 @@ void GSDevice11::RenderHW(GSHWDrawConfig& config)
 			const GSVector4 dRect(config.colclip_update_area);
 			const GSVector4 sRect = dRect / GSVector4(size.x, size.y).xyxy();
 			StretchRect(colclip_rt, sRect, config.rt, dRect, ShaderConvert::COLCLIP_RESOLVE, false);
-			g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 			Recycle(colclip_rt);
 
 			g_gs_device->SetColorClipTexture(nullptr);
@@ -2845,6 +2895,7 @@ void GSDevice11::SendHWDraw(const GSHWDrawConfig& config, GSTexture* draw_rt_clo
 		{
 			const u32 draw_list_size = static_cast<u32>(config.drawlist->size());
 			const u32 indices_per_prim = config.indices_per_prim;
+			const GSVector4i rtsize(0, 0, draw_rt->GetWidth(), draw_rt->GetHeight());
 
 			pxAssert(config.drawlist && !config.drawlist->empty());
 			pxAssert(config.drawlist_bbox && static_cast<u32>(config.drawlist_bbox->size()) == draw_list_size);
@@ -2853,10 +2904,28 @@ void GSDevice11::SendHWDraw(const GSHWDrawConfig& config, GSTexture* draw_rt_clo
 			{
 				const u32 count = (*config.drawlist)[n] * indices_per_prim;
 
-				GSVector4i bbox = (*config.drawlist_bbox)[n].rintersect(config.drawarea);
+				const GSVector4i original_bbox = (*config.drawlist_bbox)[n].rintersect(config.drawarea);
+				GSVector4i snapped_bbox = original_bbox;
 
-				// Copy only the part needed by the draw.
-				CopyAndBind(bbox);
+				// We don't want the snapped box adjustments when the rect is empty as it might make the copy to pass.
+				// The empty rect itself needs to be handled in renderer properly.
+				if (!snapped_bbox.rempty())
+				{
+					// Aligning bbox to 4 pixel boundaries so copies will be faster using Direct Memory Access,
+					// otherwise it may stall as more commands need to be issued.
+					snapped_bbox.left &= ~3;
+					snapped_bbox.top &= ~3;
+					snapped_bbox.right = (snapped_bbox.right + 3) & ~3;
+					snapped_bbox.bottom = (snapped_bbox.bottom + 3) & ~3;
+
+					// Ensure the new sizes are within bounds.
+					snapped_bbox.left = std::max(0, snapped_bbox.left);
+					snapped_bbox.top = std::max(0, snapped_bbox.top);
+					snapped_bbox.right = std::min(snapped_bbox.right, rtsize.right);
+					snapped_bbox.bottom = std::min(snapped_bbox.bottom, rtsize.bottom);
+				}
+
+				CopyAndBind(snapped_bbox);
 
 				DrawIndexedPrimitive(p, count);
 				p += count;
